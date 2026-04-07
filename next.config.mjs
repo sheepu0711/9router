@@ -2,6 +2,9 @@
 const nextConfig = {
   output: "standalone",
   serverExternalPackages: ["better-sqlite3"],
+  turbopack: {
+    root: process.cwd(),
+  },
   images: {
     unoptimized: true
   },

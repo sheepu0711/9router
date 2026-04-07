@@ -189,8 +189,10 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
 
     // Use shared chatCore
     const chatSettings = await getSettings();
+    // Deep copy body to prevent mutations from affecting retry attempts
+    const bodyCopy = JSON.parse(JSON.stringify(body));
     const result = await handleChatCore({
-      body: { ...body, model: `${provider}/${model}` },
+      body: { ...bodyCopy, model: `${provider}/${model}` },
       modelInfo: { provider, model },
       credentials: refreshedCredentials,
       log,

@@ -4,7 +4,90 @@
  */
 import { register } from "../index.js";
 import { FORMATS } from "../formats.js";
-import { v4 as uuidv4 } from "uuid";
+
+function uuidv4() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0;
+    const v = c === "x" ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
+function normalizeKiroModelId(model) {
+  if (!model || typeof model !== "string") return model;
+
+  const name = model.toLowerCase();
+
+  const standard = name.match(/^(claude-(?:haiku|sonnet|opus)-\d+)-(\d{1,2})(?:-(?:\d{8}|latest|\d+))?$/);
+  if (standard) return `${standard[1]}.${standard[2]}`;
+
+  const noMinor = name.match(/^(claude-(?:haiku|sonnet|opus)-\d+)(?:-\d{8})?$/);
+  if (noMinor) return noMinor[1];
+
+  const legacy = name.match(/^claude-(\d+)-(\d+)-(haiku|sonnet|opus)(?:-(?:\d{8}|latest|\d+))?$/);
+  if (legacy) {
+    const [, major, minor, family] = legacy;
+    const normalized = `claude-${major}.${minor}-${family}`;
+    if (normalized === "claude-3.7-sonnet") return "CLAUDE_3_7_SONNET_20250219_V1_0";
+    return normalized;
+  }
+
+  const dotWithDate = name.match(/^(claude-(?:\d+\.\d+-)?(?:haiku|sonnet|opus)(?:-\d+(?:\.\d+)?)?)-\d{8}$/);
+  if (dotWithDate) return dotWithDate[1];
+
+  const inverted = name.match(/^claude-(\d+)\.(\d+)-(haiku|sonnet|opus)-.+$/);
+  if (inverted) return `claude-${inverted[3]}-${inverted[1]}.${inverted[2]}`;
+
+  return model;
+}
+
+function sanitizeJsonSchema(schema) {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return {};
+
+  const result = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (key === "required" && Array.isArray(value) && value.length === 0) continue;
+    if (key === "additionalProperties") continue;
+    // Skip $schema and $id as Kiro doesn't support them
+    if (key === "$schema" || key === "$id") continue;
+
+    if (key === "properties" && value && typeof value === "object" && !Array.isArray(value)) {
+      result[key] = Object.fromEntries(Object.entries(value).map(([propName, propSchema]) => [
+        propName,
+        propSchema && typeof propSchema === "object" && !Array.isArray(propSchema)
+          ? sanitizeJsonSchema(propSchema)
+          : propSchema
+      ]));
+    } else if (Array.isArray(value)) {
+      result[key] = value.map(item =>
+        item && typeof item === "object" && !Array.isArray(item)
+          ? sanitizeJsonSchema(item)
+          : item
+      );
+    } else if (value && typeof value === "object") {
+      result[key] = sanitizeJsonSchema(value);
+    } else {
+      result[key] = value;
+    }
+  }
+
+  // Ensure type field exists for object schemas
+  if (result.properties && !result.type) {
+    result.type = "object";
+  }
+
+  return result;
+}
+
+function safeParseToolArguments(args) {
+  if (typeof args !== "string") return args || {};
+  try {
+    return JSON.parse(args);
+  } catch {
+    return {};
+  }
+}
 
 /**
  * Convert OpenAI messages to Kiro format
@@ -29,7 +112,8 @@ function convertMessages(messages, tools, model) {
       const userMsg = {
         userInputMessage: {
           content: content,
-          modelId: ""
+          modelId: model,
+          origin: "AI_EDITOR"
         }
       };
 
@@ -52,16 +136,21 @@ function convertMessages(messages, tools, model) {
         userMsg.userInputMessage.userInputMessageContext.tools = tools.map(t => {
           const name = t.function?.name || t.name;
           let description = t.function?.description || t.description || "";
-          
+
           if (!description.trim()) {
             description = `Tool: ${name}`;
           }
-          
+
           const schema = t.function?.parameters || t.parameters || t.input_schema || {};
-          // Normalize schema: Kiro requires required[] and proper type/properties
-          const normalizedSchema = Object.keys(schema).length === 0
-            ? { type: "object", properties: {}, required: [] }
-            : { ...schema, required: schema.required ?? [] };
+          const normalizedSchema = sanitizeJsonSchema(schema);
+
+          // Validate tool has required fields
+          if (!name) {
+            console.error(`[KIRO] Tool missing name:`, JSON.stringify(t).slice(0, 200));
+          }
+          if (!normalizedSchema || typeof normalizedSchema !== 'object') {
+            console.error(`[KIRO] Tool "${name}" has invalid schema:`, typeof normalizedSchema);
+          }
 
           return {
             toolSpecification: {
@@ -205,9 +294,7 @@ function convertMessages(messages, tools, model) {
               return {
                 toolUseId: tc.id || uuidv4(),
                 name: tc.function.name,
-                input: typeof tc.function.arguments === "string" 
-                  ? JSON.parse(tc.function.arguments) 
-                  : (tc.function.arguments || {})
+                input: safeParseToolArguments(tc.function.arguments)
               };
             } else {
               return {
@@ -271,12 +358,21 @@ function convertMessages(messages, tools, model) {
  */
 export function buildKiroPayload(model, body, stream, credentials) {
   const messages = body.messages || [];
-  const tools = body.tools || [];
-  const maxTokens = 32000;
+  let tools = body.tools || [];
+  const modelId = normalizeKiroModelId(model);
+  const maxTokens = body.max_tokens;
   const temperature = body.temperature;
   const topP = body.top_p;
 
-  const { history, currentMessage } = convertMessages(messages, tools, model);
+  // Kiro has a hard limit of ~20-40 tools - enforce a limit of 20 to be safe
+  const KIRO_MAX_TOOLS = 20;
+  if (tools.length > KIRO_MAX_TOOLS) {
+    console.warn(`[KIRO] Limiting ${tools.length} tools to ${KIRO_MAX_TOOLS} (Kiro's maximum)`);
+    // Keep the first N tools - in practice, the most important tools are usually listed first
+    tools = tools.slice(0, KIRO_MAX_TOOLS);
+  }
+
+  const { history, currentMessage } = convertMessages(messages, tools, modelId);
 
   const profileArn = credentials?.providerSpecificData?.profileArn || "";
 
@@ -291,16 +387,22 @@ export function buildKiroPayload(model, body, stream, credentials) {
       currentMessage: {
         userInputMessage: {
           content: finalContent,
-          modelId: model,
+          modelId,
           origin: "AI_EDITOR",
+          ...(currentMessage?.userInputMessage?.images && {
+            images: currentMessage.userInputMessage.images
+          }),
           ...(currentMessage?.userInputMessage?.userInputMessageContext && {
             userInputMessageContext: currentMessage.userInputMessage.userInputMessageContext
           })
         }
       },
-      history: history
     }
   };
+
+  if (history.length > 0) {
+    payload.conversationState.history = history;
+  }
 
   if (profileArn) {
     payload.profileArn = profileArn;
@@ -313,7 +415,20 @@ export function buildKiroPayload(model, body, stream, credentials) {
     if (topP !== undefined) payload.inferenceConfig.topP = topP;
   }
 
+  // Debug: log payload size and tool count
+  const payloadStr = JSON.stringify(payload);
+  const payloadSizeKB = (payloadStr.length / 1024).toFixed(2);
+  const toolCount = currentMessage?.userInputMessage?.userInputMessageContext?.tools?.length || 0;
+  console.log(`[KIRO] Payload size: ${payloadSizeKB}KB, tools: ${toolCount}`);
+
+  // Kiro has a limit of ~20 tools - if we have more, we need to handle it
+  if (toolCount > 20) {
+    console.warn(`[KIRO] Warning: ${toolCount} tools exceeds Kiro's limit of ~20. Request will likely fail.`);
+  }
+
   return payload;
 }
 
 register(FORMATS.OPENAI, FORMATS.KIRO, buildKiroPayload, null);
+
+export { normalizeKiroModelId, sanitizeJsonSchema };

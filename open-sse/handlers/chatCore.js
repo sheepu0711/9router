@@ -82,7 +82,10 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   trackPendingRequest(model, provider, connectionId, true);
   appendRequestLog({ model, provider, connectionId, status: "PENDING" }).catch(() => {});
 
-  const msgCount = translatedBody.messages?.length || translatedBody.input?.length || translatedBody.contents?.length || translatedBody.request?.contents?.length || 0;
+  const kiroMsgCount = translatedBody.conversationState
+    ? (translatedBody.conversationState.history?.length || 0) + (translatedBody.conversationState.currentMessage ? 1 : 0)
+    : 0;
+  const msgCount = translatedBody.messages?.length || translatedBody.input?.length || translatedBody.contents?.length || translatedBody.request?.contents?.length || kiroMsgCount || 0;
   log?.debug?.("REQUEST", `${provider.toUpperCase()} | ${model} | ${msgCount} msgs`);
 
   const streamController = createStreamController({

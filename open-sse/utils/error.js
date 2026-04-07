@@ -94,10 +94,15 @@ export function parseAntigravityRetryTime(message) {
 export async function parseUpstreamError(response, provider = null) {
   let message = "";
   let retryAfterMs = null;
-  
+
   try {
     const text = await response.text();
-    
+
+    // Log full error response for debugging (especially for 400 errors)
+    if (response.status === 400 && provider === "kiro") {
+      console.error(`[KIRO] 400 Error Response:`, text.slice(0, 1000));
+    }
+
     // Try parse as JSON
     try {
       const json = JSON.parse(text);
