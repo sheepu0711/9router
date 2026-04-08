@@ -4,7 +4,6 @@ data/
 **/db.json
 
 # Development
-src/
 docs/
 test/
 agents/
