@@ -8,6 +8,7 @@
     "9router": "./bin/cli.js"
   },
   "scripts": {
+    "prepare": "(test -f .env || cp .env.example .env) && npm run build",
     "dev": "next dev --webpack --port 20128",
     "build": "NODE_ENV=production next build --webpack",
     "start": "NODE_ENV=production next start",

@@ -50,6 +50,7 @@ docs/*
 !docs/ARCHITECTURE.md
 test/*
 bin/*
+!bin/cli.js
 open-sse/test/*
 RM.vn.md
 RM.md
