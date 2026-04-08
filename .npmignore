@@ -24,6 +24,9 @@ eslint.config.mjs
 .next/cache/
 .next/standalone/data/
 
+# Include build output for distribution
+!.next/standalone/
+
 
 
 

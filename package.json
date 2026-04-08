@@ -2,13 +2,12 @@
   "name": "9router-app",
   "version": "0.3.82",
   "description": "9Router web dashboard",
-  "type": "module",
   "private": false,
   "bin": {
     "9router": "./bin/cli.js"
   },
   "scripts": {
-    "postinstall": "(test -f .env || cp .env.example .env) && npm run build",
+    "postinstall": "test -f .env || cp .env.example .env",
     "dev": "next dev --webpack --port 20128",
     "build": "NODE_ENV=production next build --webpack",
     "start": "NODE_ENV=production next start",
