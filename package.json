@@ -9,7 +9,8 @@
   "scripts": {
     "postinstall": "(test -f .env || cp .env.example .env) && npm run build",
     "dev": "next dev --webpack --port 20128",
-    "build": "NODE_ENV=production next build --webpack",
+    "build": "NODE_ENV=production next build --webpack && npm run postbuild",
+    "postbuild": "cp -r .next/static .next/standalone/.next/ && cp -r public .next/standalone/ 2>/dev/null || true",
     "start": "NODE_ENV=production next start",
     "dev:bun": "bun --bun next dev --webpack --port 20128",
     "build:bun": "NODE_ENV=production bun --bun next build --webpack",
